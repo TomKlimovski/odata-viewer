@@ -47,33 +47,29 @@ def parse_odata_file(file_path: str) -> Tuple[Dict, List]:
 
 def generate_mermaid_diagram(entities: Dict, relationships: List) -> str:
     """Generate Mermaid ER diagram from entities and relationships."""
-    mermaid = ["```mermaid", "erDiagram"]
+    mermaid = ["erDiagram"]
     
-    # Add entities
+    # Add entities with simplified syntax
     for entity_name, properties in entities.items():
         mermaid.append(f"    {entity_name} {{")
-        # Add each property on a new line with correct Mermaid syntax
         for prop_name, prop_type, nullable in properties:
-            # Format: propertyName type
-            mermaid.append(f"        {prop_name} {prop_type}")
+            mermaid.append(f"        {prop_type} {prop_name}")
         mermaid.append("    }")
     
-    # Add relationships with proper Mermaid syntax
+    # Add relationships with simplified syntax
     for from_entity, to_entity, from_mult, to_mult in relationships:
-        # Convert multiplicity to Mermaid notation
+        # Use simple relationship notation
         if from_mult == "1" and to_mult == "1":
-            cardinality = "one-to-one"
+            rel = "||--||"
         elif from_mult == "1" and to_mult in ["*", "0..*"]:
-            cardinality = "one-to-many"
+            rel = "||--|{"
         elif from_mult in ["*", "0..*"] and to_mult == "1":
-            cardinality = "many-to-one"
+            rel = "}|--||"
         else:
-            cardinality = "many-to-many"
+            rel = "}|--|{"
             
-        # Add relationship with verb phrase
-        mermaid.append(f"    {from_entity} |o--o| {to_entity} : \"{cardinality}\"")
+        mermaid.append(f"    {from_entity} {rel} {to_entity} : relates")
     
-    mermaid.append("```")
     return "\n".join(mermaid)
 
 def main():
