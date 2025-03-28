@@ -94,33 +94,63 @@ def render_metadata_explorer(metadata: Dict):
     # Entities tab
     with tabs[0]:
         st.subheader("Entities and Properties")
-        # Create a searchable dropdown for entities
-        entity_names = [entity['Name'] for entity in metadata['entities']]
-        selected_entity = st.selectbox("Select Entity", entity_names)
         
-        # Show properties for selected entity
-        for entity in metadata['entities']:
-            if entity['Name'] == selected_entity:
-                df = pd.DataFrame(entity['Properties'])
-                st.dataframe(df)
+        # Get all entity names
+        entity_names = [entity['Name'] for entity in metadata['entities']]
+        
+        # Add Select All functionality
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            select_all = st.checkbox("Select All Entities")
+        
+        # Entity selection
+        if select_all:
+            selected_entities = entity_names
+            with col2:
+                st.multiselect("Select Entities", entity_names, default=entity_names, disabled=True, 
+                              label_visibility="collapsed")
+        else:
+            with col2:
+                selected_entities = st.multiselect("Select Entities", entity_names, 
+                                                 label_visibility="collapsed")
+        
+        # Display selected entities
+        if not selected_entities:
+            st.info("Please select at least one entity to view its properties")
+        else:
+            # For a single entity, don't use expanders
+            if len(selected_entities) == 1:
+                selected_entity = selected_entities[0]
+                for entity in metadata['entities']:
+                    if entity['Name'] == selected_entity:
+                        df = pd.DataFrame(entity['Properties'])
+                        st.dataframe(df, use_container_width=True)
+            else:
+                # For multiple entities, use expanders
+                for selected_entity in selected_entities:
+                    with st.expander(f"Entity: {selected_entity}"):
+                        for entity in metadata['entities']:
+                            if entity['Name'] == selected_entity:
+                                df = pd.DataFrame(entity['Properties'])
+                                st.dataframe(df, use_container_width=True)
     
     # Keys tab
     with tabs[1]:
         st.subheader("Primary Keys")
         df_keys = pd.DataFrame(metadata['keys'])
-        st.dataframe(df_keys)
+        st.dataframe(df_keys, use_container_width=True)
     
     # Relationships tab
     with tabs[2]:
         st.subheader("Relationships")
         df_relationships = pd.DataFrame(metadata['relationships'])
-        st.dataframe(df_relationships)
+        st.dataframe(df_relationships, use_container_width=True)
     
     # Navigation Properties tab
     with tabs[3]:
         st.subheader("Navigation Properties")
         df_nav = pd.DataFrame(metadata['navigation_properties'])
-        st.dataframe(df_nav)
+        st.dataframe(df_nav, use_container_width=True)
 
 def main():
     st.set_page_config(page_title="OData Viewer", layout="wide")
