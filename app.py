@@ -50,7 +50,8 @@ def parse_odata_metadata(xml_content: bytes) -> Tuple[Dict, Dict]:
         'entities': [],
         'relationships': [],
         'keys': [],
-        'navigation_properties': []
+        'navigation_properties': [],
+        'tags': {}  # Add a new dictionary to store tag information
     }
     
     # First, extract entity sets to get labels and other SAP-specific metadata
@@ -72,13 +73,49 @@ def parse_odata_metadata(xml_content: bytes) -> Tuple[Dict, Dict]:
             if sap_label is None:
                 sap_label = entity_set.get('sap:label')
             
+            # Extract tag collections - different approaches to find the tag collection
+            entity_tags = []
+            
+            # Approach 1: Find sap:tagcollection with namespace
+            tag_collection = entity_set.find('.//sap:tagcollection', ns)
+            if tag_collection is not None:
+                for tag_element in tag_collection.findall('.//sap:tag', ns):
+                    if tag_element.text:
+                        entity_tags.append(tag_element.text)
+            
+            # Approach 2: Try finding Documentation element first, then tagcollection
+            doc_element = entity_set.find('.//Documentation')
+            if doc_element is not None:
+                tag_collection = doc_element.find('.//sap:tagcollection', ns)
+                if tag_collection is not None:
+                    for tag_element in tag_collection.findall('.//sap:tag', ns):
+                        if tag_element.text and tag_element.text not in entity_tags:
+                            entity_tags.append(tag_element.text)
+            
+            # Approach 3: Try without namespace
+            doc_element = entity_set.find('.//Documentation')
+            if doc_element is not None:
+                tag_collection = doc_element.find('.//tagcollection')
+                if tag_collection is not None:
+                    for tag_element in tag_collection.findall('.//tag'):
+                        if tag_element.text and tag_element.text not in entity_tags:
+                            entity_tags.append(tag_element.text)
+            
             entity_sets[entity_name] = {
                 'Name': entity_set.get('Name'),
                 'Label': sap_label,
                 'Creatable': entity_set.get('{http://www.successfactors.com/edm/sap}creatable') or entity_set.get('sap:creatable'),
                 'Updatable': entity_set.get('{http://www.successfactors.com/edm/sap}updatable') or entity_set.get('sap:updatable'),
-                'Deletable': entity_set.get('{http://www.successfactors.com/edm/sap}deletable') or entity_set.get('sap:deletable')
+                'Deletable': entity_set.get('{http://www.successfactors.com/edm/sap}deletable') or entity_set.get('sap:deletable'),
+                'Tags': entity_tags  # Add the tags to the entity set metadata
             }
+            
+            # Update the tags dictionary to track entities by tag
+            for tag in entity_tags:
+                if tag not in metadata['tags']:
+                    metadata['tags'][tag] = []
+                if entity_name not in metadata['tags'][tag]:
+                    metadata['tags'][tag].append(entity_name)
     
     # Collect all entity types and associations from all schemas
     all_entity_type_elements = []
@@ -117,9 +154,11 @@ def parse_odata_metadata(xml_content: bytes) -> Tuple[Dict, Dict]:
         # Get entity label and other metadata if available
         entity_label = None
         entity_metadata = {}
+        entity_tags = []
         if entity_name in entity_sets:
             entity_label = entity_sets[entity_name].get('Label')
             entity_metadata = entity_sets[entity_name]
+            entity_tags = entity_sets[entity_name].get('Tags', [])
         
         # Get keys using multiple approaches
         keys = []
@@ -207,7 +246,8 @@ def parse_odata_metadata(xml_content: bytes) -> Tuple[Dict, Dict]:
             entity_entry = {
                 'Name': entity_name,
                 'Label': entity_label,
-                'Properties': properties
+                'Properties': properties,
+                'Tags': entity_tags  # Add tags to the entity entry
             }
             # Add additional SAP metadata if available
             if entity_metadata:
@@ -301,7 +341,7 @@ def render_metadata_explorer(metadata: Dict):
     st.header("OData Metadata Explorer")
     
     # Create tabs for different aspects of metadata
-    tabs = st.tabs(["Entities", "Keys", "Relationships", "Navigation Properties"])
+    tabs = st.tabs(["Entities", "Tags", "Keys", "Relationships", "Navigation Properties"])
     
     # Entities tab
     with tabs[0]:
@@ -310,8 +350,13 @@ def render_metadata_explorer(metadata: Dict):
         # Get all entity names with labels for better display
         entity_options = []
         for entity in metadata['entities']:
+            # Get display name with label if available
             display_name = entity.get('Label') if entity.get('Label') else entity['Name']
-            entity_options.append({"name": entity['Name'], "display": f"{display_name} ({entity['Name']})"})
+            
+            # Create display option (without type prefix)
+            prefixed_display = f"{display_name} ({entity['Name']})"
+            
+            entity_options.append({"name": entity['Name'], "display": prefixed_display})
         
         # Sort entities by display name
         entity_options.sort(key=lambda x: x['display'].lower())
@@ -359,6 +404,20 @@ def render_metadata_explorer(metadata: Dict):
                         cols[2].metric("Creatable", entity.get('Creatable', 'N/A'))
                         cols[3].metric("Updatable", entity.get('Updatable', 'N/A'))
                         
+                        # Show tags if available
+                        if entity.get('Tags') and len(entity['Tags']) > 0:
+                            st.subheader("Tags")
+                            tags_html = " ".join([f'<span class="tag">{tag}</span>' for tag in entity['Tags']])
+                            st.markdown(f"""
+                            <div class="tag-container">
+                                {tags_html}
+                            </div>
+                            <style>
+                            .tag-container {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }}
+                            .tag {{ background-color: #f0f2f6; border-radius: 16px; padding: 4px 12px; font-size: 0.9em; }}
+                            </style>
+                            """, unsafe_allow_html=True)
+                        
                         # Show properties with enhanced columns
                         st.subheader("Properties")
                         df = pd.DataFrame(entity['Properties'])
@@ -384,6 +443,20 @@ def render_metadata_explorer(metadata: Dict):
                             cols[2].metric("Creatable", entity_data.get('Creatable', 'N/A'))
                             cols[3].metric("Updatable", entity_data.get('Updatable', 'N/A'))
                             
+                            # Show tags if available
+                            if entity_data.get('Tags') and len(entity_data['Tags']) > 0:
+                                st.subheader("Tags")
+                                tags_html = " ".join([f'<span class="tag">{tag}</span>' for tag in entity_data['Tags']])
+                                st.markdown(f"""
+                                <div class="tag-container">
+                                    {tags_html}
+                                </div>
+                                <style>
+                                .tag-container {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }}
+                                .tag {{ background-color: #f0f2f6; border-radius: 16px; padding: 4px 12px; font-size: 0.9em; }}
+                                </style>
+                                """, unsafe_allow_html=True)
+                            
                             # Show properties
                             st.subheader("Properties")
                             df = pd.DataFrame(entity_data['Properties'])
@@ -395,8 +468,72 @@ def render_metadata_explorer(metadata: Dict):
                                 df = df[display_cols]
                             st.dataframe(df, use_container_width=True)
     
-    # Keys tab
+    # New Tags tab
     with tabs[1]:
+        st.subheader("Entities by Tag")
+        
+        # Get all unique tags and sort them
+        all_tags = list(metadata['tags'].keys())
+        all_tags.sort()
+        
+        if not all_tags:
+            st.info("No tags found in the metadata")
+        else:
+            # Tag selection
+            selected_tag = st.selectbox("Select a tag to view entities", options=all_tags)
+            
+            if selected_tag:
+                entities_with_tag = metadata['tags'][selected_tag]
+                st.success(f"Found {len(entities_with_tag)} entities with tag '{selected_tag}'")
+                
+                # Create a dataframe with entities having this tag
+                tag_entities_data = []
+                for entity_name in entities_with_tag:
+                    entity_data = next((e for e in metadata['entities'] if e['Name'] == entity_name), None)
+                    if entity_data:
+                        tag_entities_data.append({
+                            'Name': entity_data['Name'],
+                            'Label': entity_data.get('Label', 'N/A'),
+                            'Creatable': entity_data.get('Creatable', 'N/A'),
+                            'Updatable': entity_data.get('Updatable', 'N/A'),
+                            'Deletable': entity_data.get('Deletable', 'N/A'),
+                            'Properties Count': len(entity_data.get('Properties', [])),
+                            'All Tags': ', '.join(entity_data.get('Tags', []))
+                        })
+                
+                # Sort by name
+                tag_entities_data.sort(key=lambda x: x['Name'])
+                df_tag_entities = pd.DataFrame(tag_entities_data)
+                st.dataframe(df_tag_entities, use_container_width=True)
+                
+                # Add ability to view details for a selected entity
+                entity_options = [e['Name'] for e in tag_entities_data]
+                if entity_options:
+                    selected_entity = st.selectbox("Select an entity to view details", options=entity_options)
+                    if selected_entity:
+                        entity_data = next((e for e in metadata['entities'] if e['Name'] == selected_entity), None)
+                        if entity_data:
+                            st.subheader(f"Entity Details: {entity_data['Name']}")
+                            
+                            # Show entity metadata
+                            cols = st.columns([1, 1, 1, 1])
+                            cols[0].metric("Entity Name", entity_data['Name'])
+                            cols[1].metric("Label", entity_data.get('Label', 'N/A'))
+                            cols[2].metric("Creatable", entity_data.get('Creatable', 'N/A'))
+                            cols[3].metric("Updatable", entity_data.get('Updatable', 'N/A'))
+                            
+                            # Show properties
+                            st.subheader("Properties")
+                            df = pd.DataFrame(entity_data['Properties'])
+                            if not df.empty:
+                                display_cols = ['Name', 'Label', 'Type', 'IsKey', 'Nullable', 'Required', 
+                                               'Creatable', 'Updatable', 'Filterable', 'MaxLength']
+                                display_cols = [col for col in display_cols if col in df.columns]
+                                df = df[display_cols]
+                            st.dataframe(df, use_container_width=True)
+    
+    # Keys tab
+    with tabs[2]:
         st.subheader("Primary Keys")
         df_keys = pd.DataFrame(metadata['keys'])
         if not df_keys.empty:
@@ -412,7 +549,7 @@ def render_metadata_explorer(metadata: Dict):
         st.dataframe(df_keys, use_container_width=True)
     
     # Relationships tab
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("Relationships")
         df_relationships = pd.DataFrame(metadata['relationships'])
         if not df_relationships.empty:
@@ -429,7 +566,7 @@ def render_metadata_explorer(metadata: Dict):
         st.dataframe(df_relationships, use_container_width=True)
     
     # Navigation Properties tab
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("Navigation Properties")
         df_nav = pd.DataFrame(metadata['navigation_properties'])
         if not df_nav.empty:
@@ -563,31 +700,59 @@ def main():
                                 search_term = st.text_input("Search for entities to include:", 
                                                             help="Enter part of an entity name to filter the list below")
                                 
-                                # Filter entity options based on search
-                                filtered_entity_options = [e['Name'] for e in metadata['entities']]
-                                # Sort alphabetically
-                                filtered_entity_options.sort()
+                                # Create entity options without type prefixes
+                                entity_options = []
+                                for e in metadata['entities']:
+                                    # Create a display name without the type prefix
+                                    display_name = e['Name']
+                                    
+                                    # Add to options
+                                    entity_options.append({
+                                        "name": e['Name'],
+                                        "display": display_name
+                                    })
                                 
+                                # Sort options by display name
+                                entity_options.sort(key=lambda x: x["display"])
+                                
+                                # Filter based on search term if provided
                                 if search_term:
-                                    filtered_entity_options = [name for name in filtered_entity_options 
-                                                             if search_term.lower() in name.lower()]
+                                    entity_options = [opt for opt in entity_options 
+                                                    if search_term.lower() in opt["name"].lower()]
                                 
                                 # Add a note about the search results
-                                if search_term and filtered_entity_options:
-                                    st.success(f"Found {len(filtered_entity_options)} entities matching '{search_term}'")
+                                if search_term and entity_options:
+                                    st.success(f"Found {len(entity_options)} entities matching '{search_term}'")
                                 elif search_term:
                                     st.error(f"No entities found matching '{search_term}'")
                             else:
-                                filtered_entity_options = [e['Name'] for e in metadata['entities']]
-                                # Sort alphabetically
-                                filtered_entity_options.sort()
+                                # Create entity options without type prefixes
+                                entity_options = []
+                                for e in metadata['entities']:
+                                    # Create a display name without the type prefix
+                                    display_name = e['Name']
+                                    
+                                    # Add to options
+                                    entity_options.append({
+                                        "name": e['Name'],
+                                        "display": display_name
+                                    })
                                 
-                            # Add entity filter for diagram
-                            entity_filter = st.multiselect(
+                                # Sort options by display name
+                                entity_options.sort(key=lambda x: x["display"])
+                            
+                            # Create a mapping from display name to actual entity name
+                            display_to_name = {opt["display"]: opt["name"] for opt in entity_options}
+                            
+                            # Add entity filter for diagram using display names
+                            selected_displays = st.multiselect(
                                 "Filter diagram to include only specific entities:",
-                                options=filtered_entity_options,
+                                options=[opt["display"] for opt in entity_options],
                                 help="For large models, select specific entities to include in the diagram"
                             )
+                            
+                            # Convert selected display names back to actual entity names
+                            entity_filter = [display_to_name[display] for display in selected_displays]
                             
                             # Add option to include related entities
                             include_related = False
@@ -599,7 +764,6 @@ def main():
                                 )
                         else:
                             entity_filter = None
-                            include_related = False
                         
                         # Parse file and generate diagram
                         entities, relationships = parse_odata_file(tmp_file_path)
