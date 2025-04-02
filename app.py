@@ -775,18 +775,55 @@ def main():
                             
                             # If include_related is checked, add directly related entities
                             related_entities = set()
+                            nav_property_relations = []
+                            
                             if include_related:
+                                # Track both standard and NavigationProperty relationships
+                                st.info("Finding related entities through relationships...")
+                                
+                                # Create relationship lookups for better user feedback
+                                rel_counts = {"total": 0, "included": 0}
+                                entity_relations = {}
+                                
                                 for rel in relationships:
                                     from_entity, to_entity = rel[0], rel[1]
+                                    rel_counts["total"] += 1
+                                    
+                                    # Create a descriptive string for the relationship
+                                    rel_str = f"{from_entity} → {to_entity}"
+                                    
+                                    # Check if this relationship is relevant to our filtered entities
                                     if from_entity in entity_filter and to_entity not in entity_filter:
                                         related_entities.add(to_entity)
+                                        rel_counts["included"] += 1
+                                        
+                                        # Track which entities this relationship connects
+                                        if from_entity not in entity_relations:
+                                            entity_relations[from_entity] = []
+                                        entity_relations[from_entity].append(f"→ {to_entity}")
+                                        
                                     elif to_entity in entity_filter and from_entity not in entity_filter:
                                         related_entities.add(from_entity)
+                                        rel_counts["included"] += 1
+                                        
+                                        # Track which entities this relationship connects
+                                        if to_entity not in entity_relations:
+                                            entity_relations[to_entity] = []
+                                        entity_relations[to_entity].append(f"← {from_entity}")
                                 
                                 # Add the related entities to the filtered set
                                 for related in related_entities:
                                     if related in entities:
                                         filtered_entities[related] = entities[related]
+                                
+                                # Show relationship summary if related entities were found
+                                if related_entities:
+                                    with st.expander(f"Found {len(related_entities)} related entities through {rel_counts['included']} relationships", expanded=False):
+                                        st.write("Relationships by entity:")
+                                        for entity, relations in entity_relations.items():
+                                            st.markdown(f"**{entity}**:")
+                                            for rel in relations:
+                                                st.markdown(f"- {rel}")
                             
                             # Filter relationships to only include selected entities and their related ones
                             filtered_relationships = []

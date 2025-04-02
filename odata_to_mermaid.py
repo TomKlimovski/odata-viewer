@@ -172,6 +172,26 @@ def parse_odata_file(file_path: str) -> Tuple[Dict, List]:
         if properties:
             entities[name] = properties
     
+    # Create a map of association names to their association elements for faster lookup
+    assoc_map = {}
+    for assoc in all_assoc_elements:
+        name = assoc.get('Name')
+        if name:
+            # Store the association by its name
+            assoc_map[name] = assoc
+            
+            # Also try to find the schema namespace
+            schema_namespace = None
+            # Check if parent has a namespace attribute
+            parent = assoc.getparent() if hasattr(assoc, 'getparent') else None
+            if parent is not None and parent.get('Namespace'):
+                schema_namespace = parent.get('Namespace')
+            
+            # If we have a namespace, store with fully qualified name too
+            if schema_namespace:
+                full_name = f"{schema_namespace}.{name}"
+                assoc_map[full_name] = assoc
+    
     # Extract relationships
     relationships = []
     
@@ -201,7 +221,7 @@ def parse_odata_file(file_path: str) -> Tuple[Dict, List]:
             if from_entity and to_entity and from_entity in entities and to_entity in entities:
                 relationships.append((from_entity, to_entity, from_mult, to_mult))
     
-    # Method 2: From NavigationProperty elements
+    # Method 2: From NavigationProperty elements - improved to handle various relationship formats
     for entity_type in all_entity_type_elements:
         entity_name = entity_type.get('Name')
         if not entity_name or entity_name not in entities:
@@ -216,21 +236,32 @@ def parse_odata_file(file_path: str) -> Tuple[Dict, List]:
         nav_prop_elements.extend(entity_type.findall('.//edm2008:NavigationProperty', ns))
         
         for nav_prop in nav_prop_elements:
+            nav_name = nav_prop.get('Name')
             relationship = nav_prop.get('Relationship', '')
+            
+            # Skip if no relationship defined
             if not relationship:
                 continue
                 
             from_role = nav_prop.get('FromRole', '')
             to_role = nav_prop.get('ToRole', '')
             
-            # Find the association to get multiplicity info
-            assoc_name = relationship.split('.')[-1] if relationship else ''
-            if not assoc_name:
-                continue
+            # ---------------
+            # Standard approach: using FromRole/ToRole with Association lookup
+            # ---------------
+            if from_role and to_role:
+                # Try to get the association by its name (with or without namespace)
+                assoc_name = relationship.split('.')[-1] if '.' in relationship else relationship
+                assoc = None
                 
-            for assoc in all_assoc_elements:
-                if assoc.get('Name') == assoc_name:
-                    # Find End elements using multiple approaches
+                # Look up in our association map
+                if relationship in assoc_map:
+                    assoc = assoc_map[relationship]
+                elif assoc_name in assoc_map:
+                    assoc = assoc_map[assoc_name]
+                
+                if assoc is not None:
+                    # Get the end elements
                     end_elements = []
                     end_elements.extend(assoc.findall('./End'))
                     end_elements.extend(assoc.findall('.//End'))
@@ -239,30 +270,59 @@ def parse_odata_file(file_path: str) -> Tuple[Dict, List]:
                     end_elements.extend(assoc.findall('.//edm2008:End', ns))
                     
                     if len(end_elements) == 2:
-                        # Match ends to roles
-                        from_entity = None
-                        to_entity = None
-                        from_mult = None
-                        to_mult = None
+                        # Match the roles to find source and target
+                        source_end = None
+                        target_end = None
                         
                         for end in end_elements:
-                            end_role = end.get('Role', '')
-                            end_type = end.get('Type', '').split('.')[-1] if end.get('Type') else ''
-                            end_mult = end.get('Multiplicity', '1')
-                            
-                            if end_role == from_role:
-                                from_entity = end_type
-                                from_mult = end_mult
-                            elif end_role == to_role:
-                                to_entity = end_type
-                                to_mult = end_mult
+                            role = end.get('Role', '')
+                            if role == from_role:
+                                source_end = end
+                            elif role == to_role:
+                                target_end = end
                         
-                        # Check if we found a complete relationship 
-                        # and both entities exist in our entities dictionary
-                        if from_entity and to_entity and from_entity in entities and to_entity in entities:
-                            rel_tuple = (from_entity, to_entity, from_mult, to_mult)
-                            if rel_tuple not in relationships:
-                                relationships.append(rel_tuple)
+                        if source_end is not None and target_end is not None:
+                            # Get the target entity
+                            target_type = target_end.get('Type', '')
+                            target_entity = target_type.split('.')[-1] if target_type else ''
+                            
+                            # Get multiplicities
+                            source_mult = source_end.get('Multiplicity', '1')
+                            target_mult = target_end.get('Multiplicity', '1')
+                            
+                            # Add the relationship if target entity exists
+                            if target_entity and target_entity in entities:
+                                rel_tuple = (entity_name, target_entity, source_mult, target_mult)
+                                if rel_tuple not in relationships:
+                                    relationships.append(rel_tuple)
+                
+            # ---------------
+            # SAP-specific approach: Relationship name format indicates the connected entities
+            # ---------------
+            
+            # Special case for SAP: handle format like "SFOData.PerPhone_Person"
+            # Split the relationship name to extract entity names
+            rel_parts = relationship.split('.')[-1].split('_')
+            if len(rel_parts) == 2:
+                # Try to match entity names based on the relationship format
+                source_entity = entity_name
+                
+                # Check if the first or second part matches an existing entity
+                first_part, second_part = rel_parts[0], rel_parts[1]
+                target_entity = None
+                
+                # First try direct match
+                if second_part in entities:
+                    target_entity = second_part
+                # Sometimes the target entity name is in a different format
+                elif "Per" + second_part in entities:
+                    target_entity = "Per" + second_part
+                
+                # If we found a target entity, add the relationship
+                if target_entity:
+                    rel_tuple = (source_entity, target_entity, '1', '*')  # Default multiplicity 
+                    if rel_tuple not in relationships:
+                        relationships.append(rel_tuple)
     
     return entities, relationships
 
